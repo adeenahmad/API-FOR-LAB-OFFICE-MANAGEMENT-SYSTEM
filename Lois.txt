@@ -1,0 +1,759 @@
+using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.Data.SqlClient;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Web.Http;
+using BIIT_LOIS_API.Models;
+
+
+namespace BIIT_LOIS_API.Controllers
+{
+    [RoutePrefix("api/LOIS")]
+    public class LoisController : ApiController
+    {
+        /*public string Get()
+        {
+            return "Welcome To Web API";
+        }
+        public List<string> Get(int Id)
+        {
+            return new List<string> {
+                "Data1",
+                "Data2"
+            };
+        }*/
+
+        string constr = ConfigurationManager.ConnectionStrings["InventoryDBEntities"].ConnectionString;
+        SqlConnection con = null;
+        SqlCommand cmd = null;
+
+
+        //Done
+        [HttpGet]
+        public HttpResponseMessage userLogin(string email, string password)
+        {
+            try
+            {
+                User u = new User();
+                con = new SqlConnection(constr);
+                con.Open();
+                string query = @"select * from users where email='" + email + "'";
+                cmd = new SqlCommand(query, con);
+                SqlDataReader sdr = cmd.ExecuteReader();
+                if (sdr.Read())
+                {
+                    u.UID = int.Parse(sdr["UID"].ToString());
+                    u.Email = sdr["Email"].ToString();
+                    u.Password = sdr["Password"].ToString();
+                    u.InchargeOf = sdr["InchargeOf"].ToString();
+
+                    if (u.Password == password)
+                    {
+                        sdr.Close();
+                        con.Close();
+                        return Request.CreateResponse(HttpStatusCode.OK, u);
+                    }
+                    else
+                    {
+                        sdr.Close();
+                        con.Close();
+                        return Request.CreateResponse(HttpStatusCode.NotFound, "Incorrect Password");
+                    }
+
+                }
+                else
+                {
+                    sdr.Close();
+                    con.Close();
+                    return Request.CreateResponse(HttpStatusCode.NotFound, "User not found Signup!");
+                }
+
+
+            }
+            catch (Exception e)
+            {
+                return Request.CreateResponse(HttpStatusCode.BadRequest, e.Message);
+            }
+        }
+
+        //Done
+        [HttpPost]
+        public HttpResponseMessage addUser(User u)
+        {
+            try
+            {
+                con = new SqlConnection(constr);
+                con.Open();
+                string check = @"select Count(Email) as count from Users where Email='" + u.Email + "'";
+                cmd = new SqlCommand(check, con);
+                SqlDataReader sdr = cmd.ExecuteReader();
+                sdr.Read();
+                if (int.Parse(sdr["count"].ToString()) < 1)
+                {
+                    sdr.Close();
+                    string query = @"insert into users values('" + u.Email + "','" + u.Password + "','" + u.InchargeOf + "')";
+                    cmd = new SqlCommand(query, con);
+                    cmd.ExecuteNonQuery();
+                    con.Close();
+                    return Request.CreateResponse(HttpStatusCode.OK, "User added Successfully");
+                }
+                else
+                {
+                    sdr.Close();
+                    con.Close();
+                    return Request.CreateResponse(HttpStatusCode.OK, "User already exist please login");
+                }
+
+
+            }
+            catch
+            {
+                return Request.CreateResponse(HttpStatusCode.BadRequest, "Please try again");
+            }
+        }
+
+
+        public class InventoryRequest
+        {
+            public Inventory Inventory { get; set; }
+            public Inventory_Item InventoryItem { get; set; }
+        }
+
+
+        //Done
+        [HttpPost]
+        public IHttpActionResult AddInventory(InventoryRequest request)
+        {
+            try
+            {
+                using (SqlConnection con = new SqlConnection(constr))
+                {
+                    con.Open();
+
+                    // Insert Inventory data
+                    string insertInventoryQuery = @"INSERT INTO Inventory (InventoryID, InventoryName,Venue, IssueTo, Category, Quantity) 
+                                            VALUES (@InventoryID, @InventoryName,@Venue, @IssueTo, @Category, @Quantity)";
+
+                    using (SqlCommand insertInventoryCmd = new SqlCommand(insertInventoryQuery, con))
+                    {
+                        insertInventoryCmd.Parameters.AddWithValue("@InventoryID", request.Inventory.InventoryID);
+                        insertInventoryCmd.Parameters.AddWithValue("@InventoryName", request.Inventory.InventoryName);
+                        insertInventoryCmd.Parameters.AddWithValue("@Venue", request.Inventory.Venue);
+                        insertInventoryCmd.Parameters.AddWithValue("@IssueTo", request.Inventory.IssueTo);
+                        insertInventoryCmd.Parameters.AddWithValue("@Category", request.Inventory.Category);
+                        insertInventoryCmd.Parameters.AddWithValue("@Quantity", request.Inventory.quantity);
+
+                        int rowsAffectedInventory = insertInventoryCmd.ExecuteNonQuery();
+
+                        if (rowsAffectedInventory > 0)
+                        {
+                            DateTime currentDate = DateTime.Today;
+                            string formattedDate = currentDate.ToString("yyyy-MM-dd");
+
+                            // Insert Inventory_Item data
+                            string insertInventoryItemQuery = @"INSERT INTO Inventory_Item (ItemName, Status, InventoryID,date) 
+                                                        VALUES (@ItemName, @Status, @InventoryID,@date)";
+
+                            using (SqlCommand insertInventoryItemCmd = new SqlCommand(insertInventoryItemQuery, con))
+                            {
+                                insertInventoryItemCmd.Parameters.AddWithValue("@ItemName", request.InventoryItem.ItemName);
+                                insertInventoryItemCmd.Parameters.AddWithValue("@Status", request.InventoryItem.Status);
+                                insertInventoryItemCmd.Parameters.AddWithValue("@InventoryID", request.Inventory.InventoryID);
+                                insertInventoryItemCmd.Parameters.AddWithValue("@date", formattedDate);
+
+
+                                int rowsAffectedInventoryItem = insertInventoryItemCmd.ExecuteNonQuery();
+
+                                if (rowsAffectedInventoryItem > 0)
+                                {
+                                    return Ok("Inventory and Inventory_Item added successfully");
+                                }
+                            }
+                        }
+
+                        return BadRequest("Failed to add inventory and inventory_item");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return InternalServerError(ex);
+            }
+        }
+       
+        
+
+        public class InventoryWrapper
+        {
+            public Inventory Inventory { get; set; }
+            public Inventory_Item Item { get; set; }
+        }
+
+        //Scan QRcode and search by ID
+        [HttpGet]
+        public HttpResponseMessage inventoryDetail(int inventoryID)
+        {
+            // Initialize a list to store inventory details
+            List<ForSummary> sumr = new List<ForSummary>();
+
+            SqlConnection con = new SqlConnection(constr);
+            string query = @"SELECT iit.ItemID, inv.InventoryName, inv.Venue, inv.IssueTo, inv.Category, inv.quantity, iit.ItemName, iit.Status
+                     FROM Inventory inv
+                     INNER JOIN Inventory_Item iit ON inv.InventoryID = iit.InventoryID
+                     
+                     WHERE inv.InventoryID = '" + inventoryID + "'";
+
+            con.Open();
+            SqlCommand cmd = new SqlCommand(query, con);
+            SqlDataReader sdr = cmd.ExecuteReader();
+
+            while (sdr.Read())
+            {
+                sumr.Add(new ForSummary
+                {
+                    ItemID = Convert.ToInt16(sdr["ItemID"].ToString()),
+                    InventoryName = sdr["InventoryName"].ToString(),
+                    Venue = sdr["Venue"].ToString(),
+                    IssueTo = sdr["IssueTo"].ToString(),
+                    Category = sdr["Category"].ToString(),
+                    quantity = Convert.ToInt16(sdr["quantity"].ToString()),
+                    ItemName = sdr["ItemName"].ToString(),
+                    Status = sdr["Status"].ToString()
+                });
+            }
+
+            con.Close();
+            return Request.CreateResponse(HttpStatusCode.OK, sumr);
+        }
+
+        //Done
+        [HttpGet]
+
+        public HttpResponseMessage Summary(int userid)
+        {
+            List<ForSummary> sumr = new List<ForSummary>();
+            SqlConnection con = new SqlConnection(constr);
+            string query = @"select iit.ItemID,inv.InventoryName,inv.Venue,inv.IssueTo,inv.Category,inv.quantity,iit.ItemName,iit.Status from Inventory inv inner join Inventory_Item iit on inv.InventoryID=iit.InventoryID inner join Users usr on usr.InchargeOf=inv.Venue where usr.UID='" + userid + "'";
+            con.Open();
+            SqlCommand cmd = new SqlCommand(query, con);
+            SqlDataReader sdr = cmd.ExecuteReader();
+            while (sdr.Read())
+            {
+                sumr.Add(new ForSummary
+                {
+                    ItemID = Convert.ToInt16(sdr["ItemID"].ToString()),
+                    InventoryName = sdr["InventoryName"].ToString(),
+                    Venue = sdr["Venue"].ToString(),
+                    IssueTo = sdr["IssueTo"].ToString(),
+                    Category = sdr["Category"].ToString(),
+                    quantity = Convert.ToInt16(sdr["quantity"].ToString()),
+                    ItemName = sdr["ItemName"].ToString(),
+                    Status = sdr["Status"].ToString()
+                });
+            }
+            con.Close();
+            return Request.CreateResponse(HttpStatusCode.OK, sumr);
+        }
+       
+        
+        [HttpGet]
+        public HttpResponseMessage ShowAllInvenventory()
+        {
+            List<ForSummary> sumr = new List<ForSummary>();
+            SqlConnection con = new SqlConnection(constr);
+            string query = @"select iit.ItemID,inv.InventoryName,inv.Venue,inv.IssueTo,inv.Category,inv.quantity,iit.ItemName,iit.Status from Inventory inv inner join Inventory_Item iit on inv.InventoryID=iit.InventoryID  ";
+            con.Open();
+            SqlCommand cmd = new SqlCommand(query, con);
+            SqlDataReader sdr = cmd.ExecuteReader();
+            while (sdr.Read())
+            {
+                sumr.Add(new ForSummary
+                {
+                    ItemID = Convert.ToInt16(sdr["ItemID"].ToString()),
+                    InventoryName = sdr["InventoryName"].ToString(),
+                    Venue = sdr["Venue"].ToString(),
+                    IssueTo = sdr["IssueTo"].ToString(),
+                    Category = sdr["Category"].ToString(),
+                    quantity = Convert.ToInt16(sdr["quantity"].ToString()),
+                    ItemName = sdr["ItemName"].ToString(),
+                    Status = sdr["Status"].ToString()
+                });
+            }
+            con.Close();
+            return Request.CreateResponse(HttpStatusCode.OK, sumr);
+        }
+
+        //Done
+        [HttpGet]
+
+        public HttpResponseMessage GetStatus(int itemid)
+        {
+            List<ForSummary> sumr = new List<ForSummary>();
+            SqlConnection con = new SqlConnection(constr);
+            string query = @"select  ItemID,ItemName,status from Inventory_Item where ItemID='" + itemid + "'";
+            con.Open();
+            SqlCommand cmd = new SqlCommand(query, con);
+            SqlDataReader sdr = cmd.ExecuteReader();
+            while (sdr.Read())
+            {
+                sumr.Add(new ForSummary
+                {
+                    ItemID = Convert.ToInt16(sdr["ItemID"].ToString()),
+                    InventoryName = sdr["ItemName"].ToString(),
+                    Status = sdr["Status"].ToString()
+                });
+            }
+            con.Close();
+            return Request.CreateResponse(HttpStatusCode.OK, sumr);
+        }
+
+
+        //Done
+        [HttpPost]
+        public HttpResponseMessage UpdateStatus(int itemid, string up_status)
+        {
+            List<ForSummary> sumr = new List<ForSummary>();
+            SqlConnection con = new SqlConnection(constr);
+
+            con.Open();
+
+            // Update the 'Inventory_Item' table
+            string inventoryQuery = @"UPDATE Inventory_Item SET Status = @up_status WHERE ItemID = @itemid";
+            SqlCommand inventoryCmd = new SqlCommand(inventoryQuery, con);
+            inventoryCmd.Parameters.AddWithValue("@up_status", up_status);
+            inventoryCmd.Parameters.AddWithValue("@itemid", itemid);
+
+            int inventoryEffectedRows = inventoryCmd.ExecuteNonQuery();
+
+            // Update the 'Reports' table
+            string reportsQuery = @"UPDATE Reports SET rStatus = 'Checked' WHERE ItemID = @itemid";
+            SqlCommand reportsCmd = new SqlCommand(reportsQuery, con);
+            reportsCmd.Parameters.AddWithValue("@itemid", itemid);
+
+            int reportsEffectedRows = reportsCmd.ExecuteNonQuery();
+
+            con.Close();
+
+            if (inventoryEffectedRows > 0 && reportsEffectedRows > 0)
+            {
+                return Request.CreateResponse(HttpStatusCode.OK, "Status updated successfully");
+            }
+
+            return Request.CreateResponse(HttpStatusCode.OK, "Status update failed");
+        }
+
+
+
+        [HttpPost]
+        public HttpResponseMessage ChangeVenue(int inv_id, string new_ven)
+        {
+            int itemid = 0;
+            string venue = "null";
+            List<ForSummary> sumr = new List<ForSummary>();
+            SqlConnection con = new SqlConnection(constr);
+
+            con.Open();
+
+            // Retrieve itemid and venue from Inventory_Item table
+            string selectQuery = @"SELECT inv.InventoryID, ii.ItemId, inv.Venue FROM Inventory_Item AS ii INNER JOIN Inventory AS inv ON ii.InventoryID = inv.InventoryID WHERE ii.InventoryID = @inv_id";
+            SqlCommand selectCmd = new SqlCommand(selectQuery, con);
+            selectCmd.Parameters.AddWithValue("@inv_id", inv_id);
+            SqlDataReader sdr = selectCmd.ExecuteReader();
+
+            if (sdr.Read())
+            {
+                itemid = Convert.ToInt32(sdr["ItemId"]);
+                venue = sdr["Venue"].ToString();
+            }
+
+            sdr.Close();
+
+            // Insert into History table
+            DateTime currentDate = DateTime.Now.Date;
+            string formattedDate = currentDate.ToString("yyyy-M-d");
+            string insertQuery = @"INSERT INTO History (ItemId, Older_Venue, New_Venue, DateOfShifting) VALUES (@itemid, @venue, @new_ven, @formattedDate)";
+            SqlCommand insertCmd = new SqlCommand(insertQuery, con);
+            insertCmd.Parameters.AddWithValue("@itemid", itemid);
+            insertCmd.Parameters.AddWithValue("@venue", venue);
+            insertCmd.Parameters.AddWithValue("@new_ven", new_ven);
+            insertCmd.Parameters.AddWithValue("@formattedDate", formattedDate);
+            int insertEffected = insertCmd.ExecuteNonQuery();
+
+            if (insertEffected > 0)
+            {
+                // Update Inventory table
+                string updateInventoryQuery = @"UPDATE Inventory SET Venue = @new_ven WHERE InventoryID = @inv_id";
+                SqlCommand updateInventoryCmd = new SqlCommand(updateInventoryQuery, con);
+                updateInventoryCmd.Parameters.AddWithValue("@new_ven", new_ven);
+                updateInventoryCmd.Parameters.AddWithValue("@inv_id", inv_id);
+                int updateInventoryEffected = updateInventoryCmd.ExecuteNonQuery();
+
+                // Update Reports table
+                string updateReportsQuery = @"UPDATE Reports SET rStatus = 'Checked' WHERE ItemID = @itemid";
+                SqlCommand updateReportsCmd = new SqlCommand(updateReportsQuery, con);
+                updateReportsCmd.Parameters.AddWithValue("@itemid", itemid);
+                int updateReportsEffected = updateReportsCmd.ExecuteNonQuery();
+
+                if (updateInventoryEffected > 0 && updateReportsEffected > 0)
+                {
+                    con.Close();
+                    return Request.CreateResponse(HttpStatusCode.OK, "Data Saved Successfully");
+                }
+            }
+
+            con.Close();
+            return Request.CreateResponse(HttpStatusCode.OK, "Data could not be saved");
+        }
+
+        //Done
+        [HttpPost]
+        public HttpResponseMessage addReport(Report r)
+        {
+            try
+            {
+                // Set rStatus to "unChecked"
+                r.rStatus = "unChecked";
+
+                using (con = new SqlConnection(constr))
+                {
+                    con.Open();
+                    string query = "INSERT INTO Reports VALUES (@ItemID, @Subject, @disc, @rStatus)";
+                    using (SqlCommand cmd = new SqlCommand(query, con))
+                    {
+                        cmd.Parameters.AddWithValue("@ItemID", r.ItemID);
+                        cmd.Parameters.AddWithValue("@Subject", r.Subject);
+                        cmd.Parameters.AddWithValue("@disc", r.disc);
+                        cmd.Parameters.AddWithValue("@rStatus", r.rStatus);
+
+                        int rowsAffected = cmd.ExecuteNonQuery();
+
+                        if (rowsAffected > 0)
+                        {
+                            return Request.CreateResponse(HttpStatusCode.OK, "Report added successfully");
+                        }
+                        else
+                        {
+                            return Request.CreateResponse(HttpStatusCode.BadRequest, "Failed to add the report");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError, ex.Message);
+            }
+        }
+
+        
+
+        [HttpGet]
+        public HttpResponseMessage GetReport()
+        {
+            try
+            {
+                using (con = new SqlConnection(constr))
+                {
+                    con.Open();
+                    string query = "SELECT * FROM Reports WHERE rStatus = 'Unchecked'";
+
+                    using (SqlCommand cmd = new SqlCommand(query, con))
+                    {
+                        using (SqlDataReader reader = cmd.ExecuteReader())
+                        {
+                            List<Report> reports = new List<Report>();
+
+                            while (reader.Read())
+                            {
+                                Report report = new Report
+                                {
+                                    RId = Convert.ToInt32(reader["RId"]),
+                                    ItemID = Convert.ToInt32(reader["ItemID"]),
+                                    Subject = reader["Subject"].ToString(),
+                                    disc = reader["disc"].ToString(),
+                                    rStatus = reader["rStatus"].ToString()
+                                };
+
+                                reports.Add(report);
+                            }
+
+                            if (reports.Count > 0)
+                            {
+                                return Request.CreateResponse(HttpStatusCode.OK, reports);
+                            }
+                            else
+                            {
+                                return Request.CreateResponse(HttpStatusCode.NotFound, "No reports found");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError, ex.Message);
+            }
+        }
+        
+        [HttpGet]
+        public HttpResponseMessage GetHistory(int ItmID)
+        {
+            try
+            {
+                using (SqlConnection con = new SqlConnection(constr))
+                {
+                    con.Open();
+                    string query = "SELECT TOP 1 H.*, IV.InventoryName, IV.Category FROM History H JOIN Inventory_Item I ON H.ItemID = I.ItemID JOIN Inventory IV ON I.InventoryID = IV.InventoryID WHERE H.ItemID = @ItmID";
+
+                    using (SqlCommand cmd = new SqlCommand(query, con))
+                    {
+                        cmd.Parameters.AddWithValue("@ItmID", ItmID);
+                        using (SqlDataReader reader = cmd.ExecuteReader())
+                        {
+                            if (reader.Read())
+                            {
+                                // Assuming History table has columns named HID, ItemID, Older_Venue, New_Venue, DateOfShifting
+                                int historyId = reader.GetInt32(reader.GetOrdinal("HID"));
+                                int itemId = reader.GetInt32(reader.GetOrdinal("ItemID"));
+                                string olderVenue = reader.GetString(reader.GetOrdinal("Older_Venue"));
+                                string newVenue = reader.GetString(reader.GetOrdinal("New_Venue"));
+                                DateTime dateOfShifting = reader.GetDateTime(reader.GetOrdinal("DateOfShifting"));
+
+                                // Assuming Inventory table has columns named InventoryID, InventoryName, Venue, IssueTo, Category, Quantity
+                                string inventoryName = reader.GetString(reader.GetOrdinal("InventoryName"));
+                                string category = reader.GetString(reader.GetOrdinal("Category"));
+
+                                // Format the date as "YYYY-MM-DD"
+                                string formattedDate = dateOfShifting.ToString("yyyy-MM-dd");
+
+                                // You can create a history object or populate the retrieved data into a suitable structure
+                                // For example, create a Dictionary<string, object> to hold the history data
+                                var historyObject = new Dictionary<string, object>();
+                                historyObject["HID"] = historyId;
+                                historyObject["ItemID"] = itemId;
+                                historyObject["Older_Venue"] = olderVenue;
+                                historyObject["New_Venue"] = newVenue;
+                                historyObject["DateOfShifting"] = formattedDate;
+                                historyObject["InventoryName"] = inventoryName;
+                                historyObject["Category"] = category;
+
+                                // Return the history object in the response
+                                return Request.CreateResponse(HttpStatusCode.OK, historyObject);
+                            }
+                            else
+                            {
+                                // If no history records found for the given ItemID
+                                return Request.CreateResponse(HttpStatusCode.NotFound, "No history records found for the given ItemID.");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError, ex.Message);
+            }
+
+            // If no history records found for the given ItemID
+            return Request.CreateResponse(HttpStatusCode.NotFound, "No history records found for the given ItemID.");
+        }
+
+
+        //Done
+        [HttpPost]
+        public HttpResponseMessage InsertMaintenanceHistory(maintenance_History data)
+        {
+            try
+            {
+                using (SqlConnection con = new SqlConnection(constr))
+                {
+                    con.Open();
+
+                    string query = @"INSERT INTO maintenance_History 
+                            (ItemID, OutDate, InDate, Descriptions, Charges, VendorContact, VendorName)
+                            VALUES (@ItemID, @OutDate, @InDate, @Descriptions, @Charges, @VendorContact, @VendorName);
+                            SELECT SCOPE_IDENTITY();";
+
+                    using (SqlCommand cmd = new SqlCommand(query, con))
+                    {
+                        cmd.Parameters.AddWithValue("@ItemID", data.ItemID);
+                        cmd.Parameters.AddWithValue("@OutDate", data.OutDate);
+                        cmd.Parameters.AddWithValue("@InDate", data.InDate);
+                        cmd.Parameters.AddWithValue("@Descriptions", data.Descriptions);
+                        cmd.Parameters.AddWithValue("@Charges", data.Charges);
+                        cmd.Parameters.AddWithValue("@VendorContact", data.VendorContact);
+                        cmd.Parameters.AddWithValue("@VendorName", data.VendorName);
+
+                        // Execute the query and retrieve the generated MID value
+                        int generatedMID = Convert.ToInt32(cmd.ExecuteScalar());
+
+                        // Update the status in Inventory_Item table
+                        string updateQuery = "UPDATE Inventory_Item SET Status = 'Maintenance' WHERE ItemID = @ItemID";
+
+                        using (SqlCommand updateCmd = new SqlCommand(updateQuery, con))
+                        {
+                            updateCmd.Parameters.AddWithValue("@ItemID", data.ItemID);
+                            updateCmd.ExecuteNonQuery();
+                        }
+
+                        // Return the generated MID in the response
+                        var responseObj = new { MID = generatedMID };
+                        return Request.CreateResponse(HttpStatusCode.OK, responseObj);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError, ex.Message);
+            }
+        }
+
+
+        [HttpGet]
+        public HttpResponseMessage GetMaintenanceHistory(int ItemID)
+        {
+            try
+            {
+                using (SqlConnection con = new SqlConnection(constr))
+                {
+                    con.Open();
+
+                    string query = @"SELECT [MID], [ItemID], [OutDate], [InDate], [Descriptions], [Charges], [VendorContact], [VendorName]
+                             FROM [InventoryDB].[dbo].[maintenance_History]
+                             WHERE [ItemID] = @ItemID";
+
+                    using (SqlCommand cmd = new SqlCommand(query, con))
+                    {
+                        cmd.Parameters.AddWithValue("@ItemID", ItemID);
+
+                        using (SqlDataReader reader = cmd.ExecuteReader())
+                        {
+                            List<maintenance_History> maintenanceHistoryList = new List<maintenance_History>();
+
+                            while (reader.Read())
+                            {
+                                maintenance_History history = new maintenance_History();
+                                history.MID = reader.GetInt32(reader.GetOrdinal("MID"));
+                                history.ItemID = reader.GetInt32(reader.GetOrdinal("ItemID"));
+                                history.OutDate = reader.GetDateTime(reader.GetOrdinal("OutDate"));
+                                history.InDate = reader.GetDateTime(reader.GetOrdinal("InDate"));
+                                history.Descriptions = reader.GetString(reader.GetOrdinal("Descriptions"));
+                                history.Charges = reader.GetInt32(reader.GetOrdinal("Charges"));
+                                history.VendorContact = reader.GetDecimal(reader.GetOrdinal("VendorContact"));
+                                history.VendorName = reader.GetString(reader.GetOrdinal("VendorName"));
+
+                                maintenanceHistoryList.Add(history);
+                            }
+
+                            return Request.CreateResponse(HttpStatusCode.OK, maintenanceHistoryList);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError, ex.Message);
+            }
+        }
+
+
+        [HttpGet]
+        public HttpResponseMessage GetReportByData()
+        {
+            // Initialize a list to store inventory details
+            List<ForSummary> sumr = new List<ForSummary>();
+
+
+
+            SqlConnection con = new SqlConnection(constr);
+            string query = @"SELECT I.InventoryID, I.InventoryName, I.Venue, I.IssueTo, I.Category, I.Quantity, II.ItemName, II.Status,II.quantity
+                        FROM Inventory I JOIN Inventory_Item II ON I.InventoryID = II.InventoryID 
+                             WHERE II.Status IN ( 'Dead','Serving', 'Maintenance')";
+
+            con.Open();
+            SqlCommand cmd = new SqlCommand(query, con);
+            SqlDataReader sdr = cmd.ExecuteReader();
+
+            while (sdr.Read())
+            {
+                sumr.Add(new ForSummary
+                {
+                    InventoryID = Convert.ToInt16(sdr["InventoryID"].ToString()),
+                    InventoryName = sdr["InventoryName"].ToString(),
+                    Venue = sdr["Venue"].ToString(),
+                    IssueTo = sdr["IssueTo"].ToString(),
+                    Category = sdr["Category"].ToString(),
+                    Quantity = Convert.ToInt16(sdr["Quantity"].ToString()),
+                    ItemName = sdr["ItemName"].ToString(),
+                    Status = sdr["Status"].ToString(),
+                    quantity = Convert.ToInt16(sdr["quantity"].ToString()),
+
+                });
+            }
+
+            con.Close();
+            return Request.CreateResponse(HttpStatusCode.OK, sumr);
+        }
+
+        [HttpGet]
+        public HttpResponseMessage GetReportByDate(string status, DateTime ndate)
+        {
+            // Initialize a list to store inventory details
+            List<ForSummary> sumr = new List<ForSummary>();
+
+            string formattedDate = ndate.ToString("yyyy-MM-dd");
+
+            SqlConnection con = new SqlConnection(constr);
+            string query = @"SELECT  inv.InventoryName, inv.Venue, inv.Category, iit.ItemName, iit.Status
+                     FROM Inventory inv
+                     INNER JOIN Inventory_Item iit ON inv.InventoryID = iit.InventoryID
+                     
+                     WHERE iit.Status= '" + status + "' and iit.date='" + formattedDate + "'";
+
+            con.Open();
+            SqlCommand cmd = new SqlCommand(query, con);
+            SqlDataReader sdr = cmd.ExecuteReader();
+
+            while (sdr.Read())
+            {
+                sumr.Add(new ForSummary
+                {
+
+                    InventoryName = sdr["InventoryName"].ToString(),
+                    Venue = sdr["Venue"].ToString(),
+                    Category = sdr["Category"].ToString(),
+                    ItemName = sdr["ItemName"].ToString(),
+                    Status = sdr["Status"].ToString()
+                });
+            }
+
+            con.Close();
+            return Request.CreateResponse(HttpStatusCode.OK, sumr);
+        }
+
+
+    }
+
+
+
+    public class ForSummary
+    {
+        public int Quantity { get; set; }
+        public int InventoryID { get; set; }
+        public int ItemID { get; set; }
+        public string InventoryName { get; set; }
+        public string Venue { get; set; }
+        public string IssueTo { get; set; }
+
+        public string Category { get; set; }
+
+        public int quantity { get; set; }
+        public string ItemName { get; set; }
+        public string Status { get; set; }
+        public string rStatus { get; set; }
+
+    }
+
+}
